@@ -6,10 +6,11 @@ use winit::{
     window::WindowBuilder,
 };
 
+use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 struct Vertex {
     v: [f32; 3],
 }
@@ -37,6 +38,31 @@ const CELL: [Vertex; 16] = [
     v!(-0.5,  0.5,  0.5), v!( 0.5,  0.5,  0.5),
     v!( 0.5,  0.5,  0.5), v!( 0.5,  0.5, -0.5),
 ];
+
+fn create_multisampled_framebuffer(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+    sample_count: u32,
+) -> wgpu::TextureView {
+    let multisampled_texture_extent = wgpu::Extent3d {
+        width: config.width,
+        height: config.height,
+        depth_or_array_layers: 1,
+    };
+    let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
+        size: multisampled_texture_extent,
+        mip_level_count: 1,
+        sample_count,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        label: None,
+    };
+
+    device
+        .create_texture(multisampled_frame_descriptor)
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -66,6 +92,20 @@ fn main() -> Result<()> {
         None,
     ))?;
 
+    let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
+    let size = window.inner_size();
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: swapchain_format,
+        width: size.width,
+        height: size.height,
+        present_mode: wgpu::PresentMode::Mailbox,
+    };
+
+    surface.configure(&device, &config);
+    let sample_count = 4;
+    let multisampled_framebuffer = create_multisampled_framebuffer(&device, &config, sample_count);
+
     let mut rng = rand::thread_rng();
     let particles: Vec<f32> = (0..1000 * 4).map(|_| rng.gen_range(-10. ..10.)).collect();
     let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -82,8 +122,6 @@ fn main() -> Result<()> {
         push_constant_ranges: &[],
     });
 
-    let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
-
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Pipeline"),
         layout: Some(&pipeline_layout),
@@ -97,7 +135,11 @@ fn main() -> Result<()> {
             ..Default::default()
         },
         depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: true,
+        },
         multiview: None,
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -106,16 +148,42 @@ fn main() -> Result<()> {
         }),
     });
 
-    let size = window.inner_size();
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: swapchain_format,
-        width: size.width,
-        height: size.height,
-        present_mode: wgpu::PresentMode::Mailbox,
-    };
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertex Buffer"),
+        contents: bytemuck::cast_slice(&CELL),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let line_shader = device.create_shader_module(&wgpu::include_wgsl!("line.wgsl"));
 
-    surface.configure(&device, &config);
+    let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Line Pipeline"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &line_shader,
+            entry_point: "vs_main",
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Vertex>() as _,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            }],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: true,
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &line_shader,
+            entry_point: "fs_main",
+            targets: &[swapchain_format.into()],
+        }),
+        multiview: None,
+    });
 
     event_loop.run(move |event, _, control_flow| {
         // Have the closure take ownership of the resources.
@@ -160,8 +228,8 @@ fn main() -> Result<()> {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
                         color_attachments: &[wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
+                            view: &multisampled_framebuffer,
+                            resolve_target: Some(&view),
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
                                     r: 0.1,
@@ -176,6 +244,10 @@ fn main() -> Result<()> {
                     });
                     rpass.set_pipeline(&pipeline);
                     rpass.draw(0..3, 0..1);
+
+                    rpass.set_pipeline(&line_pipeline);
+                    rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    rpass.draw(0..CELL.len() as _, 0..1);
                 }
 
                 queue.submit(Some(encoder.finish()));
