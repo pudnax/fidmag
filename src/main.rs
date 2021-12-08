@@ -83,13 +83,13 @@ struct State {
     multisampled_framebuffer: wgpu::TextureView,
     vertex_buffer: wgpu::Buffer,
 
-    swapchain_format: TextureFormat,
+    surface_format: TextureFormat,
 }
 
 impl State {
     const MSAA_SAMPLE_COUNT: u32 = 4;
     pub async fn new(window: &impl HasRawWindowHandle, width: u32, height: u32) -> Self {
-        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+        let instance = wgpu::Instance::new(wgpu::Backends::all());
 
         let surface = unsafe { instance.create_surface(&window) };
         let adapter = instance
@@ -101,9 +101,10 @@ impl State {
             .await
             .unwrap();
 
+        dbg!(&adapter.get_info());
         let features = adapter.features();
         let limits = adapter.limits();
-        let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
+        let format = surface.get_preferred_format(&adapter).unwrap();
 
         let (device, queue) = adapter
             .request_device(
@@ -119,7 +120,7 @@ impl State {
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_preferred_format(&adapter).unwrap(),
+            format,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -164,7 +165,7 @@ impl State {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "f_main",
-                targets: &[swapchain_format.into()],
+                targets: &[format.into()],
             }),
         });
 
@@ -195,7 +196,7 @@ impl State {
             fragment: Some(wgpu::FragmentState {
                 module: &line_shader,
                 entry_point: "fs_main",
-                targets: &[swapchain_format.into()],
+                targets: &[format.into()],
             }),
             multiview: None,
         });
@@ -211,7 +212,7 @@ impl State {
             line_pipeline,
             multisampled_framebuffer,
             vertex_buffer,
-            swapchain_format,
+            surface_format: format,
         }
     }
 
@@ -238,6 +239,7 @@ impl State {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -297,7 +299,10 @@ fn main() -> Result<()> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::WindowEvent { ref event, .. } => match event {
+            Event::WindowEvent {
+                ref event,
+                window_id,
+            } if window_id == window.id() => match event {
                 WindowEvent::CloseRequested
                 | WindowEvent::KeyboardInput {
                     input:
@@ -308,8 +313,8 @@ fn main() -> Result<()> {
                         },
                     ..
                 } => *control_flow = ControlFlow::Exit,
-                WindowEvent::Resized(size) => {
-                    state.resize(size.width, size.height);
+                WindowEvent::Resized(new_size) => {
+                    state.resize(new_size.width, new_size.height);
                     window.request_redraw();
                 }
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
