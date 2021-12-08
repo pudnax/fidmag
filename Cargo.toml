@@ -12,6 +12,7 @@ env_logger = "0.9.0"
 glam = "0.20.1"
 pollster = "0.2.4"
 rand = "0.8.4"
+raw-window-handle = "0.4.2"
 # wgpu = "0.11.1"
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "c1c855bb9812d0c1703bd112d09e3eba58e45b6b" }
 winit = "0.26.0"
