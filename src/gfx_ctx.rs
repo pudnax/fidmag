@@ -1,11 +1,12 @@
-mod vertex;
+mod line;
 
+use rand::Rng;
 use raw_window_handle::HasRawWindowHandle;
 use wgpu::util::DeviceExt;
 
 use crate::{
     camera::{Camera, CameraUniform},
-    gfx_ctx::vertex::{Vertex, CELL},
+    gfx_ctx::line::draw_lines_command,
 };
 
 fn create_multisampled_framebuffer(
@@ -57,6 +58,111 @@ pub fn create_depth_texture(
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
+fn draw_particles_command(
+    n: u32,
+    device: &wgpu::Device,
+    sample_count: u32,
+    format: wgpu::TextureFormat,
+    camera_bind_group_layout: &wgpu::BindGroupLayout,
+    camera_bind_group: &wgpu::BindGroup,
+) -> wgpu::RenderBundle {
+    let mut rng = rand::thread_rng();
+    let particles: Vec<f32> = (0..n * 4).map(|_| rng.gen_range(-1. ..1.)).collect();
+    let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Particles"),
+        contents: bytemuck::cast_slice(&particles),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+    });
+    let particle_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Particle Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+    let particle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Particle Bind Group"),
+        layout: &particle_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: particle_buffer.as_entire_binding(),
+        }],
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Particle Pipeline Descriptor"),
+        bind_group_layouts: &[camera_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let shader = device.create_shader_module(&wgpu::include_wgsl!("particle.wgsl"));
+
+    let draw_particles_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Draw Particle Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vs_main",
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 4]>() as _,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fs_main",
+            targets: &[wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::PointList,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            ..Default::default()
+        },
+        multiview: None,
+    });
+
+    let mut encoder = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+        label: Some("Particle Bundle Encoder"),
+        color_formats: &[format],
+        depth_stencil: Some(wgpu::RenderBundleDepthStencil {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_read_only: false,
+            stencil_read_only: false,
+        }),
+        sample_count,
+        multiview: None,
+    });
+    encoder.set_pipeline(&draw_particles_pipeline);
+    encoder.set_vertex_buffer(0, particle_buffer.slice(..));
+    encoder.set_bind_group(0, camera_bind_group, &[]);
+    encoder.draw(0..particles.len() as u32 / 4, 0..1);
+    encoder.finish(&wgpu::RenderBundleDescriptor {
+        label: Some("Draw Particles Bundle"),
+    })
+}
+
 pub struct Context {
     surface: wgpu::Surface,
     pub device: wgpu::Device,
@@ -68,14 +174,16 @@ pub struct Context {
     pub height: u32,
 
     trig_pipeline: wgpu::RenderPipeline,
-    line_pipeline: wgpu::RenderPipeline,
     multisampled_framebuffer: wgpu::TextureView,
-    vertex_buffer: wgpu::Buffer,
+
+    draw_lines_command: wgpu::RenderBundle,
 
     pub camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+
+    draw_particles_command: wgpu::RenderBundle,
 }
 
 impl Context {
@@ -128,11 +236,6 @@ impl Context {
 
         let multisampled_framebuffer =
             create_multisampled_framebuffer(&device, &config, Self::MSAA_SAMPLE_COUNT);
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&CELL),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
 
         let mut camera_uniform = CameraUniform::default();
         camera_uniform.update_view_proj(&camera);
@@ -147,7 +250,7 @@ impl Context {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -206,43 +309,22 @@ impl Context {
             }),
         });
 
-        let line_shader = device.create_shader_module(&wgpu::include_wgsl!("line.wgsl"));
+        let draw_lines_command = draw_lines_command(
+            &device,
+            Self::MSAA_SAMPLE_COUNT,
+            format,
+            &camera_bind_group_layout,
+            &camera_bind_group,
+        );
 
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Line Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &line_shader,
-                entry_point: "vs_main",
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as _,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                }],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: Self::MSAA_SAMPLE_COUNT,
-                mask: !0,
-                alpha_to_coverage_enabled: true,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &line_shader,
-                entry_point: "fs_main",
-                targets: &[format.into()],
-            }),
-            multiview: None,
-        });
+        let draw_particles_command = draw_particles_command(
+            2000000,
+            &device,
+            Self::MSAA_SAMPLE_COUNT,
+            format,
+            &camera_bind_group_layout,
+            &camera_bind_group,
+        );
 
         Self {
             surface,
@@ -253,13 +335,14 @@ impl Context {
             width,
             height,
             trig_pipeline,
-            line_pipeline,
+            draw_lines_command,
             multisampled_framebuffer,
-            vertex_buffer,
             camera,
             camera_buffer,
             camera_bind_group,
             camera_uniform,
+
+            draw_particles_command,
         }
     }
 
@@ -328,10 +411,11 @@ impl Context {
                     stencil_ops: None,
                 }),
             });
-            rpass.set_pipeline(&self.line_pipeline);
-            rpass.set_bind_group(0, &self.camera_bind_group, &[]);
-            rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            rpass.draw(0..CELL.len() as _, 0..1);
+            rpass.execute_bundles(
+                [&self.draw_lines_command, &self.draw_particles_command]
+                    .iter()
+                    .cloned(),
+            );
 
             rpass.set_pipeline(&self.trig_pipeline);
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);

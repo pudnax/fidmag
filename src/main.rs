@@ -4,8 +4,6 @@ use anyhow::Result;
 use camera::Camera;
 use gfx_ctx::Context;
 use glam::Vec3;
-use rand::Rng;
-use wgpu::util::DeviceExt;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{
@@ -36,16 +34,6 @@ fn main() -> Result<()> {
         );
         Context::new(&window, width, height, camera)
     });
-
-    let mut rng = rand::thread_rng();
-    let particles: Vec<f32> = (0..1000 * 4).map(|_| rng.gen_range(-10. ..10.)).collect();
-    let _particle_buffer = context
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Particles"),
-            contents: bytemuck::cast_slice(&particles),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
 
     let mut mouse_dragged = false;
 
