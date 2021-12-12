@@ -17,8 +17,6 @@ var<storage, read_write> particles: ParticleData;
 [[group(1), binding(0)]]
 var<uniform> rand: Uni;
 
-let s = 0.;
-
 fn hash31(p: f32) -> vec3<f32> {
   var p3 = fract(vec3<f32>(p) * vec3<f32>(.1031, .1030, .0973));
   p3 = p3 + dot(p3, p3.yzx + 33.33);

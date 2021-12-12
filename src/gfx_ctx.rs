@@ -2,7 +2,7 @@ mod line;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{vec3, Vec3, Vec4};
-use rand::Rng;
+use rand::{distributions::Standard, prelude::Distribution, Rng};
 use raw_window_handle::HasRawWindowHandle;
 use wgpu::util::DeviceExt;
 
@@ -222,6 +222,28 @@ fn draw_particles_command(
     })
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Particle {
+    pos: Vec4,
+    vel: Vec4,
+    lifetime: f32,
+    _padding: [f32; 3],
+}
+
+impl Particle {
+    const VERTEX_FORMAT: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+    fn new(pos: Vec4, vel: Vec4, lifetime: f32) -> Self {
+        Self {
+            pos,
+            vel,
+            lifetime,
+            _padding: [0.; 3],
+        }
+    }
+}
+
 pub struct Context {
     surface: wgpu::Surface,
     pub device: wgpu::Device,
@@ -246,7 +268,6 @@ pub struct Context {
     fill_shader: wgpu::ComputePipeline,
     particle_num: u32,
     particle_buffer: wgpu::Buffer,
-    particle_buffer2: wgpu::Buffer,
     particle_bind_group: wgpu::BindGroup,
 
     rand_uniform: wgpu::Buffer,
@@ -255,30 +276,11 @@ pub struct Context {
     field_texture: wgpu::TextureView,
 }
 
-fn hash31(p: f32) -> [f32; 4] {
-    let mut p3 = [p * 0.1031, p * 0.1030, p * 0.0973].map(|x| x.fract());
-    p3 = p3.zip([p3[1], p3[2], p3[0]]).map(|(x, y)| x * (y + 33.33));
-    let (px, py, pz) = (p3[0], p3[1], p3[2]);
-    [px, px, py, 1.]
-        .zip([py, pz, pz, 1.])
-        .zip([pz, py, px, 1.])
-        .map(|((x, y), z)| ((x + y) * z).fract() * 2.0 - 1.)
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Particle {
-    pos: Vec4,
-    vel: Vec4,
-    lifetime: f32,
-    _padding: [f32; 3],
-}
-
-impl Particle {
-    const VERTEX_FORMAT: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
-    fn new(pos: Vec4, vel: Vec4, lifetime: f32) -> Self {
-        Self {
+impl Distribution<Particle> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Particle {
+        let (pos, vel) = rng.gen();
+        let lifetime = rng.gen();
+        Particle {
             pos,
             vel,
             lifetime,
@@ -419,21 +421,12 @@ impl Context {
         );
 
         let particle_num = 1e6 as u32;
-        // let mut rng = rand::thread_rng();
-        let particles: Vec<f32> = (0..particle_num * 4).flat_map(|i| hash31(i as _)).collect();
-        // let particles: Vec<f32> = (0..particle_num)
-        //     .map(|_| rand::random::<f32>() * 2. - 1.)
-        //     .collect();
+        let mut rng = rand::thread_rng();
+        let particles: Vec<f32> = (0..particle_num).map(|_| rng.gen_range(-1. ..1.)).collect();
         let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Particles CPU"),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
             contents: bytemuck::cast_slice(&particles),
-        });
-        let particle_buffer2 = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Particles"),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-            size: particle_num as u64 * std::mem::size_of::<[f32; 4]>() as u64,
-            mapped_at_creation: false,
         });
         let particle_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -531,7 +524,6 @@ impl Context {
 
             draw_particles_command,
             particle_buffer,
-            particle_buffer2,
             particle_bind_group,
             particle_num,
             fill_shader,
