@@ -1,3 +1,4 @@
+#![feature(array_zip)]
 use std::time::{Duration, Instant};
 
 use anyhow::Result;

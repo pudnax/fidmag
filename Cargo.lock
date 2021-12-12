@@ -440,6 +440,10 @@ name = "glam"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68270e16582ea40f9c5b2fcd588fbc9cb696577222e04a64d9085cc314806a8a"
+dependencies = [
+ "bytemuck",
+ "rand",
+]
 
 [[package]]
 name = "glow"
