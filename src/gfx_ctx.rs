@@ -1,8 +1,10 @@
 mod line;
 
+use std::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
 use glam::{vec3, Vec3, Vec4};
-use rand::{distributions::Standard, prelude::Distribution, Rng};
+use rand::Rng;
 use raw_window_handle::HasRawWindowHandle;
 use wgpu::util::DeviceExt;
 
@@ -170,9 +172,9 @@ fn draw_particles_command(
             module: &shader,
             entry_point: "vs_main",
             buffers: &[wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<[f32; 4]>() as _,
+                array_stride: std::mem::size_of::<Particle>() as _,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+                attributes: &Particle::VERTEX_FORMAT,
             }],
         },
         fragment: Some(wgpu::FragmentState {
@@ -242,6 +244,20 @@ impl Particle {
             _padding: [0.; 3],
         }
     }
+
+    fn new_rand(
+        pos_range: Range<f32>,
+        vel_range: Range<f32>,
+        life_range: Range<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
+        use std::array::from_fn;
+        Self::new(
+            Vec4::from(from_fn(|_| rng.gen_range(pos_range.clone()))),
+            Vec4::from(from_fn(|_| rng.gen_range(vel_range.clone()))),
+            rng.gen_range(life_range),
+        )
+    }
 }
 
 pub struct Context {
@@ -274,19 +290,6 @@ pub struct Context {
     rand_uniform_binding: wgpu::BindGroup,
 
     field_texture: wgpu::TextureView,
-}
-
-impl Distribution<Particle> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Particle {
-        let (pos, vel) = rng.gen();
-        let lifetime = rng.gen();
-        Particle {
-            pos,
-            vel,
-            lifetime,
-            _padding: [0.; 3],
-        }
-    }
 }
 
 impl Context {
@@ -422,7 +425,9 @@ impl Context {
 
         let particle_num = 1e6 as u32;
         let mut rng = rand::thread_rng();
-        let particles: Vec<f32> = (0..particle_num).map(|_| rng.gen_range(-1. ..1.)).collect();
+        let particles: Vec<_> = (0..particle_num)
+            .map(|_| Particle::new_rand(-1. ..1., -0.1..0.1, 0. ..100., &mut rng))
+            .collect();
         let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Particles CPU"),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,

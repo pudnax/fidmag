@@ -1,10 +1,12 @@
 struct Particle {
   pos: vec4<f32>;
+  vel: vec4<f32>;
+  life: f32;
 };
 
 [[block]]
 struct ParticleData {
-  data: [[stride(16)]] array<Particle>;
+  data: [[stride(48)]] array<Particle>;
 };
 
 [[block]]

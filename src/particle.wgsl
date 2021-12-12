@@ -6,7 +6,9 @@ struct Camera {
 [[group(0), binding(0)]] var<uniform> camera : Camera;
 
 struct VertexInput {
-  [[builtin(position)]] pos: vec4<f32>;
+  [[location(0)]] pos: vec4<f32>;
+  [[location(1)]] vel: vec4<f32>;
+  [[location(2)]] life: f32;
 };
 
 struct VertexOutput {
@@ -15,9 +17,10 @@ struct VertexOutput {
 };
 
 [[stage(vertex)]]
-fn vs_main([[location(0)]] position: vec4<f32>) -> VertexOutput {
-  let pos = camera.view_proj * vec4<f32>(position.xyz, 1.0);
-  return VertexOutput(pos, position.xyz);
+fn vs_main(p: VertexInput) -> VertexOutput {
+  let pos = p.pos.xyz;
+  let clip_pos = camera.view_proj * vec4<f32>(pos, 1.0);
+  return VertexOutput(clip_pos, pos);
 }
 
 [[stage(fragment)]]
