@@ -113,6 +113,7 @@ fn main() -> Result<()> {
             Event::RedrawRequested(_) => {
                 // context.camera.add_yaw(-0.001);
                 context.update();
+                context.simulate(0.);
                 match context.render() {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost) => {

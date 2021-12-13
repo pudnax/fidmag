@@ -29,8 +29,8 @@ struct Particle {
 fn generate_particle(seed: u32) -> Particle {
   var p : Particle;
 
-  p.pos = vec4<f32>(rand3(seed), 1.0);
-  p.vel = vec4<f32>(rand3(seed + 1u), 1.0) * 0.1;
+  p.pos = rand4(seed);
+  p.vel = rand4(seed + 1u) * 0.1;
   p.life = (hash(seed) * 0.5 + 0.5) * 100.;
   return p;
 }
@@ -63,16 +63,49 @@ fn integrate(
 
   // let new_pos = curr_pos + curr_vel * time.dt;
   let new_pos = curr_pos + curr_vel * 0.1;
-  let new_life = curr_life - 1.;
+  let new_life = curr_life - curr_vel.w;
 
-  if (new_life < 0. || new_pos.x > 1. || new_pos.x < -1.
-                    || new_pos.y > 1. || new_pos.y < -1.
-		    || new_pos.z > 1. || new_pos.z < -1.) {
+  if (new_life < 0. || abs(new_pos.x) > 1.
+                    || abs(new_pos.y) > 1.
+		    || abs(new_pos.z) > 1.) {
     (*p) = generate_particle(id);
     return;
   }
   (*p).pos = new_pos;
   (*p).life = new_life;
+}
+
+[[group(2), binding(0)]]
+var field_texture: texture_3d<f32>;
+[[group(2), binding(1)]]
+var field_sampler: sampler;
+
+fn get_charge(pos: vec3<f32>) -> vec3<f32> {
+  let chargePosition = vec3<f32>(0.); // + .5;
+  let q = -0.2;
+  let pc = pos - chargePosition;
+  let r2 = dot(pc, pc);
+  let E = pc * q / (pow(r2, 1.5) + 1.0e-2);
+  return E;
+}
+
+fn get_field(p: vec3<f32>) -> vec3<f32> {
+  var res = textureSampleLevel(field_texture, field_sampler, p, 0.).xyz;
+  res = res + get_charge(p);
+  return res;
+}
+
+[[stage(compute), workgroup_size(256, 1, 1)]]
+fn compute_field(
+    [[builtin(global_invocation_id)]] global_id: vec3<u32>,
+) {
+  let id = global_id.x;
+  let p = &particles.data[id];
+  let curr_pos = (*p).pos.xyz;
+  let curr_vel = (*p).vel;
+  let curr_life = (*p).life;
+
+  (*p).vel = vec4<f32>(get_field(curr_pos) * 0.1 * curr_life, curr_vel.w);
 }
 
 [[block]]

@@ -14,9 +14,49 @@ use crate::{
 };
 
 const WORKGROUP_SIZE: u32 = 256;
-pub fn dispatch_optimal_size(len: u32, subgroup_size: u32) -> u32 {
+pub fn dispatch_size(len: u32) -> u32 {
+    let subgroup_size = WORKGROUP_SIZE;
     let padded_size = (subgroup_size - len % subgroup_size) % subgroup_size;
     (len + padded_size) / subgroup_size
+}
+
+fn trig_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    pipeline_layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(&wgpu::include_wgsl!("shader.wgsl"));
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "v_main",
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: 4,
+            ..Default::default()
+        },
+        multiview: None,
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "f_main",
+            targets: &[format.into()],
+        }),
+    })
 }
 
 fn create_multisampled_framebuffer(
@@ -139,7 +179,7 @@ fn get_field_texture(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D3,
             format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
         },
         bytemuck::cast_slice(&texture_data),
     );
@@ -382,38 +422,7 @@ impl Context {
             push_constant_ranges: &[],
         });
 
-        let shader = device.create_shader_module(&wgpu::include_wgsl!("shader.wgsl"));
-
-        let trig_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "v_main",
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: Self::MSAA_SAMPLE_COUNT,
-                ..Default::default()
-            },
-            multiview: None,
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "f_main",
-                targets: &[format.into()],
-            }),
-        });
+        let trig_pipeline = trig_pipeline(&device, format, &pipeline_layout);
 
         let draw_lines_command = draw_lines_command(
             &device,
@@ -494,14 +503,16 @@ impl Context {
                 entry_point: "fill",
             })
         };
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let mut cpass = encoder.begin_compute_pass(&Default::default());
-        cpass.set_pipeline(&fill_shader);
-        cpass.set_bind_group(0, &particle_bind_group, &[]);
-        cpass.set_bind_group(1, &rand_uniform_binding, &[]);
-        cpass.dispatch(dispatch_optimal_size(particle_num, WORKGROUP_SIZE), 1, 1);
-        drop(cpass);
-        queue.submit(Some(encoder.finish()));
+        {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let mut cpass = encoder.begin_compute_pass(&Default::default());
+            cpass.set_pipeline(&fill_shader);
+            cpass.set_bind_group(0, &particle_bind_group, &[]);
+            cpass.set_bind_group(1, &rand_uniform_binding, &[]);
+            cpass.dispatch(dispatch_size(particle_num), 1, 1);
+            drop(cpass);
+            queue.submit(Some(encoder.finish()));
+        }
 
         let draw_particles_command = draw_particles_command(
             &device,
@@ -515,11 +526,57 @@ impl Context {
 
         let (width, height, depth) = (64, 64, 64);
         let field_texture = get_field_texture(&device, &queue, width, height, depth);
+        let field_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Field Sampler"),
+            address_mode_u: wgpu::AddressMode::MirrorRepeat,
+            address_mode_v: wgpu::AddressMode::MirrorRepeat,
+            address_mode_w: wgpu::AddressMode::MirrorRepeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let field_texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Field Texture Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        count: None,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    },
+                ],
+            });
+        let field_texture_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Field Texture Bind Group"),
+            layout: &field_texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&field_texture),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&field_sampler),
+                },
+            ],
+        });
 
         let time_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Time"),
             size: std::mem::size_of::<[f32; 2]>() as _,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
         let time_bind_group_layout =
@@ -608,6 +665,26 @@ impl Context {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+        self.queue
+            .write_buffer(&self.rand_uniform, 0, &rand::random::<f32>().to_le_bytes());
+    }
+
+    pub fn simulate(&mut self, dt: f32) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Compute Encoder"),
+            });
+
+        let mut cpass = encoder.begin_compute_pass(&Default::default());
+
+        cpass.set_pipeline(&self.integrate_pipeline);
+        cpass.set_bind_group(0, &self.particle_bind_group, &[]);
+        cpass.dispatch(dispatch_size(self.particle_num), 1, 1);
+
+        drop(cpass);
+
+        self.queue.submit(Some(encoder.finish()));
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -622,19 +699,6 @@ impl Context {
                 label: Some("Render Encoder"),
             });
 
-        self.queue
-            .write_buffer(&self.rand_uniform, 0, &rand::random::<f32>().to_le_bytes());
-
-        let mut cpass = encoder.begin_compute_pass(&Default::default());
-        cpass.set_pipeline(&self.integrate_pipeline);
-        cpass.set_bind_group(0, &self.particle_bind_group, &[]);
-        cpass.dispatch(
-            dispatch_optimal_size(self.particle_num, WORKGROUP_SIZE),
-            1,
-            1,
-        );
-        drop(cpass);
-
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -643,9 +707,9 @@ impl Context {
                     resolve_target: Some(&view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
+                            r: 0.015,
+                            g: 0.015,
+                            b: 0.015,
                             a: 1.0,
                         }),
                         store: true,
