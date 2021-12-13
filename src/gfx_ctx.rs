@@ -480,8 +480,8 @@ impl Context {
                 resource: rand_uniform.as_entire_binding(),
             }],
         });
+        let sim_shader = device.create_shader_module(&wgpu::include_wgsl!("simulation.wgsl"));
         let fill_shader = {
-            let shader = device.create_shader_module(&wgpu::include_wgsl!("fill_buffer.wgsl"));
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Fill Pipeline Layout"),
                 bind_group_layouts: &[&particle_bind_group_layout, &rand_uniform_layout],
@@ -490,8 +490,8 @@ impl Context {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Fill Pipeline"),
                 layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: "main",
+                module: &sim_shader,
+                entry_point: "fill",
             })
         };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -537,7 +537,6 @@ impl Context {
                 }],
             });
         let integrate_pipeline = {
-            let shader = device.create_shader_module(&wgpu::include_wgsl!("simulation.wgsl"));
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
                 bind_group_layouts: &[&particle_bind_group_layout],
@@ -546,7 +545,7 @@ impl Context {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Integration Pipeline"),
                 layout: Some(&layout),
-                module: &shader,
+                module: &sim_shader,
                 entry_point: "integrate",
             })
         };
