@@ -91,10 +91,9 @@ fn get_charge(pos: vec3<f32>) -> vec3<f32> {
 }
 
 fn get_field(p: vec3<f32>) -> vec3<f32> {
-  let tex_dims = vec3<f32>(textureDimensions(field_texture));
-  var res = textureSampleLevel(field_texture, field_sampler, p, 0.).xyz;
-  res = res * 2. * 0. + get_charge(p) * 0.5;
-  return res;
+  var res = textureSampleLevel(field_texture, field_sampler, p , 0.).xyz;
+  res = res * .02 + get_charge(p) * 0.05;
+  return res * 0.1;
 }
 
 [[stage(compute), workgroup_size(256, 1, 1)]]
@@ -107,7 +106,8 @@ fn compute_field(
   let curr_vel = (*p).vel;
   let curr_life = (*p).life;
 
-  (*p).vel = vec4<f32>(get_field(curr_pos) * 0.1, curr_vel.w);
+  let field = clamp(get_field(curr_pos), vec3<f32>(0.0001), vec3<f32>(10.));
+  (*p).vel = vec4<f32>(field, curr_vel.w);
 }
 
 [[block]]

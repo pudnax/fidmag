@@ -20,45 +20,6 @@ pub fn dispatch_size(len: u32) -> u32 {
     (len + padded_size) / subgroup_size
 }
 
-fn trig_pipeline(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    pipeline_layout: &wgpu::PipelineLayout,
-) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(&wgpu::include_wgsl!("shader.wgsl"));
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: "v_main",
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: 4,
-            ..Default::default()
-        },
-        multiview: None,
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: "f_main",
-            targets: &[format.into()],
-        }),
-    })
-}
-
 fn create_multisampled_framebuffer(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
@@ -112,27 +73,14 @@ pub fn create_depth_texture(
 struct Charge {
     q: f32,
     pos: Vec3,
-    inner_r: f32,
-    outter_r: f32,
 }
 
 impl Charge {
-    fn new(q: f32, pos: Vec3, inner_r: f32, outter_r: f32) -> Self {
-        Self {
-            q,
-            pos,
-            inner_r,
-            outter_r,
-        }
-    }
-
     fn new_rand(rng: &mut impl Rng) -> Self {
-        let q_range = 20.;
+        let q_range = 1.;
         Self {
             q: rng.gen_range(-q_range..q_range),
             pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-1.0..1.0))),
-            inner_r: rng.gen_range(0.0..0.1),
-            outter_r: rng.gen_range(0.1..0.3),
         }
     }
 }
@@ -159,11 +107,13 @@ fn get_field_texture(
     let mut rng = rand::thread_rng();
     let charges: Vec<Charge> = (0..6).map(|_| Charge::new_rand(&mut rng)).collect();
     let texture_data: Vec<Vec4> = (0..width * height * depth)
-        .map(|i| {
-            let x = (i % width) as f32;
-            let y = (i / width) as f32;
-            let z = (i / (width * height)) as f32;
-            let p = vec3(x, y, z) / vec3(width as f32, height as f32, depth as f32) * 2.0 - 1.0;
+        .map(|id| {
+            let i = id as f32;
+            let (width, height, depth) = (width as f32, height as f32, depth as f32);
+            let [x, y, z] = [i % width, (i / width) % height, i / (width * height)];
+
+            let p = vec3(x, y, z) / vec3(width, height, depth) * 2.0 - 1.0;
+
             get_field(p, &charges).extend(1.)
         })
         .collect();
@@ -272,6 +222,7 @@ struct Particle {
     _padding: [f32; 3],
 }
 
+#[allow(dead_code)]
 impl Particle {
     const VERTEX_FORMAT: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
@@ -299,6 +250,14 @@ impl Particle {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct SharedUniform {
+    dt: f32,
+    time: f32,
+    seed: u32,
+}
+
 pub struct Context {
     surface: wgpu::Surface,
     pub device: wgpu::Device,
@@ -309,7 +268,6 @@ pub struct Context {
     pub width: u32,
     pub height: u32,
 
-    trig_pipeline: wgpu::RenderPipeline,
     multisampled_framebuffer: wgpu::TextureView,
 
     draw_lines_command: wgpu::RenderBundle,
@@ -317,22 +275,18 @@ pub struct Context {
     pub camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
 
     draw_particles_command: wgpu::RenderBundle,
-    fill_shader: wgpu::ComputePipeline,
     particle_num: u32,
-    particle_buffer: wgpu::Buffer,
+    _particle_buffer: wgpu::Buffer,
     particle_bind_group: wgpu::BindGroup,
 
     rand_uniform: wgpu::Buffer,
-    rand_uniform_binding: wgpu::BindGroup,
+    _rand_uniform_binding: wgpu::BindGroup,
 
     integrate_pipeline: wgpu::ComputePipeline,
     simulation_pipeline: wgpu::ComputePipeline,
 
-    field_texture: wgpu::TextureView,
-    field_sampler: wgpu::Sampler,
     field_texture_binding: wgpu::BindGroup,
 }
 
@@ -419,14 +373,6 @@ impl Context {
             }],
             label: Some("camera_bind_group"),
         });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Line Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let trig_pipeline = trig_pipeline(&device, format, &pipeline_layout);
 
         let draw_lines_command = draw_lines_command(
             &device,
@@ -636,28 +582,23 @@ impl Context {
             depth_texture,
             width,
             height,
-            trig_pipeline,
             draw_lines_command,
             multisampled_framebuffer,
             camera,
             camera_buffer,
-            camera_bind_group,
             camera_uniform,
 
             draw_particles_command,
-            particle_buffer,
+            _particle_buffer: particle_buffer,
             particle_bind_group,
             particle_num,
-            fill_shader,
 
             rand_uniform,
-            rand_uniform_binding,
+            _rand_uniform_binding: rand_uniform_binding,
 
             integrate_pipeline,
             simulation_pipeline,
 
-            field_texture,
-            field_sampler,
             field_texture_binding,
         }
     }
@@ -693,7 +634,7 @@ impl Context {
             .write_buffer(&self.rand_uniform, 0, &rand::random::<f32>().to_le_bytes());
     }
 
-    pub fn simulate(&mut self, dt: f32) {
+    pub fn simulate(&mut self, _dt: f32) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -758,10 +699,6 @@ impl Context {
                     .iter()
                     .cloned(),
             );
-
-            // rpass.set_pipeline(&self.trig_pipeline);
-            // rpass.set_bind_group(0, &self.camera_bind_group, &[]);
-            // rpass.draw(0..3, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();

@@ -111,7 +111,7 @@ fn main() -> Result<()> {
                 _ => (),
             },
             Event::RedrawRequested(_) => {
-                // context.camera.add_yaw(-0.001);
+                context.camera.add_yaw(-0.001);
                 context.update();
                 context.simulate(0.);
                 match context.render() {
