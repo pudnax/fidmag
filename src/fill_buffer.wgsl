@@ -30,10 +30,10 @@ fn ihash(x: u32) -> u32 {
 }
 fn hash(a: u32) -> f32 { return f32(ihash(a)) / f32(0x7FFFFFFFu) - 1.; }
 fn rand4(seed: u32) -> vec4<f32> {
-  return vec4<f32>(hash(seed ^ 0x34F85A93),
-                   hash(seed ^ 0x85FB93D5),
-                   hash(seed ^ 0x6253DF84),
-		   hash(seed ^ 0x25FC3625));
+  return vec4<f32>(hash(seed ^ 0x34F85A93u),
+                   hash(seed ^ 0x85FB93D5u),
+                   hash(seed ^ 0x6253DF84u),
+		   hash(seed ^ 0x25FC3625u));
 }
 fn rand3(seed: u32) -> vec3<f32> {
   return vec3<f32>(hash(seed ^ 0x348CD593u),
