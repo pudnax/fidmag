@@ -14,20 +14,20 @@ struct VertexInput {
 struct VertexOutput {
   [[builtin(position)]] clip_position: vec4<f32>;
   [[location(0)]] world_position: vec3<f32>;
+  [[location(1)]] life: f32;
 };
 
 [[stage(vertex)]]
-fn vs_main(p: VertexInput) -> VertexOutput {
-  let pos = p.pos.xyz;
+fn vs_main(point: VertexInput) -> VertexOutput {
+  let pos = point.pos.xyz;
   let clip_pos = camera.view_proj * vec4<f32>(pos, 1.0);
-  return VertexOutput(clip_pos, pos);
+  return VertexOutput(clip_pos, pos, point.life);
 }
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-  // if (length(in.world_position) > 1.) {
-  //   discard;
-  // }
+  // if (length(in.world_position) > 1.) { discard; }
   let a = 1. - length(in.world_position);
-  return vec4<f32>(.6, .1, .2, 1.);
+  let col = vec3<f32>(.6, .1, .2) * in.life / 100.;
+  return vec4<f32>(col, 1.);
 }

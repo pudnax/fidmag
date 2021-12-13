@@ -87,13 +87,11 @@ impl Charge {
     }
 
     fn new_rand(rng: &mut impl Rng) -> Self {
-        // let max_pos = 3. * Vec3::ONE;
         Self {
             q: rng.gen_range(-10. ..10.),
             pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-3. ..3.))),
-            // pos: rng.gen_range(-max_pos..max_pos),
-            inner_r: rng.gen_range(0. ..1.),
-            outter_r: rng.gen_range(1. ..3.),
+            inner_r: rng.gen_range(0.0..0.1),
+            outter_r: rng.gen_range(0.1..0.3),
         }
     }
 }
@@ -424,14 +422,11 @@ impl Context {
         );
 
         let particle_num = 1e6 as u32;
-        let mut rng = rand::thread_rng();
-        let particles: Vec<_> = (0..particle_num)
-            .map(|_| Particle::new_rand(-1. ..1., -0.1..0.1, 0. ..100., &mut rng))
-            .collect();
-        let particle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Particles CPU"),
+        let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Particles"),
+            size: particle_num as u64 * std::mem::size_of::<Particle>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-            contents: bytemuck::cast_slice(&particles),
+            mapped_at_creation: false,
         });
         let particle_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -497,6 +492,14 @@ impl Context {
                 entry_point: "main",
             })
         };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut cpass = encoder.begin_compute_pass(&Default::default());
+        cpass.set_pipeline(&fill_shader);
+        cpass.set_bind_group(0, &particle_bind_group, &[]);
+        cpass.set_bind_group(1, &rand_uniform_binding, &[]);
+        cpass.dispatch(dispatch_optimal_size(particle_num, WORKGROUP_SIZE), 1, 1);
+        drop(cpass);
+        queue.submit(Some(encoder.finish()));
 
         let draw_particles_command = draw_particles_command(
             &device,
