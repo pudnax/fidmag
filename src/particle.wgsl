@@ -26,8 +26,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-  // if (length(in.world_position) > 1.) { discard; }
+  if (length(in.world_position) > 1.) { discard; }
+  let xaxis = step(0., in.world_position.x) * vec3<f32>(0., 0.1, 0.6);
   let a = 1. - length(in.world_position);
-  let col = vec3<f32>(.6, .1, .2) * in.life / 100.;
+
+  var col = vec3<f32>(.6, .1, .2) * in.life / 100.;
+  col = col + xaxis;
   return vec4<f32>(col, 1.);
 }

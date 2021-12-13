@@ -75,12 +75,13 @@ fn integrate(
   (*p).life = new_life;
 }
 
-[[group(2), binding(0)]]
+[[group(1), binding(0)]]
 var field_texture: texture_3d<f32>;
-[[group(2), binding(1)]]
+[[group(1), binding(1)]]
 var field_sampler: sampler;
 
 fn get_charge(pos: vec3<f32>) -> vec3<f32> {
+  // potentially mouse
   let chargePosition = vec3<f32>(0.); // + .5;
   let q = -0.2;
   let pc = pos - chargePosition;
@@ -90,8 +91,9 @@ fn get_charge(pos: vec3<f32>) -> vec3<f32> {
 }
 
 fn get_field(p: vec3<f32>) -> vec3<f32> {
+  let tex_dims = vec3<f32>(textureDimensions(field_texture));
   var res = textureSampleLevel(field_texture, field_sampler, p, 0.).xyz;
-  res = res + get_charge(p);
+  res = res * 2. * 0. + get_charge(p) * 0.5;
   return res;
 }
 
@@ -105,7 +107,7 @@ fn compute_field(
   let curr_vel = (*p).vel;
   let curr_life = (*p).life;
 
-  (*p).vel = vec4<f32>(get_field(curr_pos) * 0.1 * curr_life, curr_vel.w);
+  (*p).vel = vec4<f32>(get_field(curr_pos) * 0.1, curr_vel.w);
 }
 
 [[block]]

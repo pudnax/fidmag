@@ -127,9 +127,10 @@ impl Charge {
     }
 
     fn new_rand(rng: &mut impl Rng) -> Self {
+        let q_range = 20.;
         Self {
-            q: rng.gen_range(-10. ..10.),
-            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-1. ..1.))),
+            q: rng.gen_range(-q_range..q_range),
+            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-1.0..1.0))),
             inner_r: rng.gen_range(0.0..0.1),
             outter_r: rng.gen_range(0.1..0.3),
         }
@@ -139,7 +140,7 @@ impl Charge {
 fn get_charge(pos: Vec3, charge: Charge) -> Vec3 {
     let pc = pos - charge.pos;
     let r2 = pc.dot(pc);
-    pc * (charge.q / r2.powf(1.5) + 1.0e-2)
+    pc * (charge.q / r2.powf(1.5) + 1.0e-3)
 }
 
 fn get_field(p: Vec3, charges: &[Charge]) -> Vec3 {
@@ -156,7 +157,7 @@ fn get_field_texture(
     depth: u32,
 ) -> wgpu::TextureView {
     let mut rng = rand::thread_rng();
-    let charges: Vec<Charge> = (0..9).map(|_| Charge::new_rand(&mut rng)).collect();
+    let charges: Vec<Charge> = (0..6).map(|_| Charge::new_rand(&mut rng)).collect();
     let texture_data: Vec<Vec4> = (0..width * height * depth)
         .map(|i| {
             let x = (i % width) as f32;
@@ -327,9 +328,12 @@ pub struct Context {
     rand_uniform: wgpu::Buffer,
     rand_uniform_binding: wgpu::BindGroup,
 
-    field_texture: wgpu::TextureView,
-
     integrate_pipeline: wgpu::ComputePipeline,
+    simulation_pipeline: wgpu::ComputePipeline,
+
+    field_texture: wgpu::TextureView,
+    field_sampler: wgpu::Sampler,
+    field_texture_binding: wgpu::BindGroup,
 }
 
 impl Context {
@@ -524,7 +528,7 @@ impl Context {
             particle_num,
         );
 
-        let (width, height, depth) = (64, 64, 64);
+        let [width, height, depth] = [0, 0, 0].map(|_| 32 * 2);
         let field_texture = get_field_texture(&device, &queue, width, height, depth);
         let field_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Field Sampler"),
@@ -607,6 +611,23 @@ impl Context {
             })
         };
 
+        let simulation_pipeline = {
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Simulation Pipeline Layout"),
+                bind_group_layouts: &[
+                    &particle_bind_group_layout,
+                    &field_texture_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Simulation Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &sim_shader,
+                entry_point: "compute_field",
+            })
+        };
+
         Self {
             surface,
             device,
@@ -632,9 +653,12 @@ impl Context {
             rand_uniform,
             rand_uniform_binding,
 
-            field_texture,
-
             integrate_pipeline,
+            simulation_pipeline,
+
+            field_texture,
+            field_sampler,
+            field_texture_binding,
         }
     }
 
@@ -677,6 +701,11 @@ impl Context {
             });
 
         let mut cpass = encoder.begin_compute_pass(&Default::default());
+
+        cpass.set_pipeline(&self.simulation_pipeline);
+        cpass.set_bind_group(0, &self.particle_bind_group, &[]);
+        cpass.set_bind_group(1, &self.field_texture_binding, &[]);
+        cpass.dispatch(dispatch_size(self.particle_num), 1, 1);
 
         cpass.set_pipeline(&self.integrate_pipeline);
         cpass.set_bind_group(0, &self.particle_bind_group, &[]);
@@ -730,9 +759,9 @@ impl Context {
                     .cloned(),
             );
 
-            rpass.set_pipeline(&self.trig_pipeline);
-            rpass.set_bind_group(0, &self.camera_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
+            // rpass.set_pipeline(&self.trig_pipeline);
+            // rpass.set_bind_group(0, &self.camera_bind_group, &[]);
+            // rpass.draw(0..3, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
