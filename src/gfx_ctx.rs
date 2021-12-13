@@ -77,10 +77,10 @@ struct Charge {
 
 impl Charge {
     fn new_rand(rng: &mut impl Rng) -> Self {
-        let q_range = 1.;
+        let q_range = 0.3;
         Self {
             q: rng.gen_range(-q_range..q_range),
-            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-1.0..1.0))),
+            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-0.5..0.5))),
         }
     }
 }

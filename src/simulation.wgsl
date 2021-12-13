@@ -31,7 +31,7 @@ fn generate_particle(seed: u32) -> Particle {
 
   p.pos = rand4(seed);
   p.vel = rand4(seed + 1u) * 0.1;
-  p.life = (hash(seed) * 0.5 + 0.5) * 100.;
+  p.life = 50. + (hash(seed) * 0.5 + 0.5) * 50.;
   return p;
 }
 
@@ -91,9 +91,9 @@ fn get_charge(pos: vec3<f32>) -> vec3<f32> {
 }
 
 fn get_field(p: vec3<f32>) -> vec3<f32> {
-  var res = textureSampleLevel(field_texture, field_sampler, p , 0.).xyz;
-  res = res * .02 + get_charge(p) * 0.05;
-  return res * 0.1;
+  var res = textureSampleLevel(field_texture, field_sampler, p, 0.).xyz;
+  res = res * .02 + get_charge(p) * 0.01;
+  return res;
 }
 
 [[stage(compute), workgroup_size(256, 1, 1)]]
@@ -106,7 +106,8 @@ fn compute_field(
   let curr_vel = (*p).vel;
   let curr_life = (*p).life;
 
-  let field = clamp(get_field(curr_pos), vec3<f32>(0.0001), vec3<f32>(10.));
+  // let field = clamp(get_field(curr_pos), vec3<f32>(0.0001), vec3<f32>(20.));
+  let field = get_field(curr_pos); // , vec3<f32>(0.0001), vec3<f32>(20.));
   (*p).vel = vec4<f32>(field, curr_vel.w);
 }
 
