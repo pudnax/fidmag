@@ -9,15 +9,16 @@ struct ParticleData {
   data: [[stride(48)]] array<Particle>;
 };
 
+[[group(0), binding(0)]]
+var<storage, read_write> particles: ParticleData;
+
 [[block]]
-struct Uni {
+struct Uniform {
   v: f32;
 };
 
-[[group(0), binding(0)]]
-var<storage, read_write> particles: ParticleData;
 [[group(1), binding(0)]]
-var<uniform> rand: Uni;
+var<uniform> rand: Uniform;
 
 fn ihash(x: u32) -> u32 {
   var a = x;
@@ -46,8 +47,7 @@ fn main(
     [[builtin(global_invocation_id)]] global_id: vec3<u32>,
 ) {
   let id = global_id.x;
-  let uid = global_id.x;
-  let p = &particles.data[uid];
+  let p = &particles.data[id];
 
   (*p).pos = vec4<f32>(rand3(id + u32(rand.v)), 1.0);
   (*p).vel = vec4<f32>(rand3(id + u32(rand.v + 1.)), 1.0) * 0.1;

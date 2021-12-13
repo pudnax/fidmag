@@ -89,7 +89,7 @@ impl Charge {
     fn new_rand(rng: &mut impl Rng) -> Self {
         Self {
             q: rng.gen_range(-10. ..10.),
-            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-3. ..3.))),
+            pos: Vec3::from([0., 0., 0.].map(|_| rng.gen_range(-1. ..1.))),
             inner_r: rng.gen_range(0.0..0.1),
             outter_r: rng.gen_range(0.1..0.3),
         }
@@ -288,6 +288,8 @@ pub struct Context {
     rand_uniform_binding: wgpu::BindGroup,
 
     field_texture: wgpu::TextureView,
+
+    integrate_pipeline: wgpu::ComputePipeline,
 }
 
 impl Context {
@@ -514,6 +516,41 @@ impl Context {
         let (width, height, depth) = (64, 64, 64);
         let field_texture = get_field_texture(&device, &queue, width, height, depth);
 
+        let time_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Time"),
+            size: std::mem::size_of::<[f32; 2]>() as _,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let time_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Time Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let integrate_pipeline = {
+            let shader = device.create_shader_module(&wgpu::include_wgsl!("simulation.wgsl"));
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&particle_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Integration Pipeline"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: "integrate",
+            })
+        };
+
         Self {
             surface,
             device,
@@ -540,6 +577,8 @@ impl Context {
             rand_uniform_binding,
 
             field_texture,
+
+            integrate_pipeline,
         }
     }
 
@@ -586,6 +625,16 @@ impl Context {
 
         self.queue
             .write_buffer(&self.rand_uniform, 0, &rand::random::<f32>().to_le_bytes());
+
+        let mut cpass = encoder.begin_compute_pass(&Default::default());
+        cpass.set_pipeline(&self.integrate_pipeline);
+        cpass.set_bind_group(0, &self.particle_bind_group, &[]);
+        cpass.dispatch(
+            dispatch_optimal_size(self.particle_num, WORKGROUP_SIZE),
+            1,
+            1,
+        );
+        drop(cpass);
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -9,6 +9,7 @@ struct VertexInput {
   [[location(0)]] pos: vec4<f32>;
   [[location(1)]] vel: vec4<f32>;
   [[location(2)]] life: f32;
+  // p: Particle;
 };
 
 struct VertexOutput {
@@ -18,10 +19,10 @@ struct VertexOutput {
 };
 
 [[stage(vertex)]]
-fn vs_main(point: VertexInput) -> VertexOutput {
-  let pos = point.pos.xyz;
+fn vs_main(in: VertexInput) -> VertexOutput {
+  let pos = in.pos.xyz;
   let clip_pos = camera.view_proj * vec4<f32>(pos, 1.0);
-  return VertexOutput(clip_pos, pos, point.life);
+  return VertexOutput(clip_pos, pos, in.life);
 }
 
 [[stage(fragment)]]
